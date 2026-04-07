@@ -1,0 +1,49 @@
+[package]
+name = "phantom-ai"
+version = "0.1.0"
+description = "Phantom AI — Your Invisible Interview Copilot"
+authors = ["Phantom AI Team"]
+edition = "2021"
+
+[lib]
+name = "phantom_ai_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Audio capture
+cpal = "0.15"
+
+# Async runtime + networking
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+url = "2"
+
+# HTTP client for AI APIs
+reqwest = { version = "0.12", features = ["json", "stream", "native-tls"] }
+
+# Audio processing
+hound = "3.5"       # WAV encoding
+rubato = "0.16"     # Resampling
+
+# Utilities
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+base64 = "0.22"
+log = "0.4"
+env_logger = "0.11"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"

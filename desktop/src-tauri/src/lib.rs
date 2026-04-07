@@ -12,6 +12,7 @@ mod audio;
 mod stt;
 mod ai;
 mod ocr;
+mod utils;
 
 #[cfg(target_os = "macos")]
 #[macro_use]
@@ -409,6 +410,18 @@ fn set_company_notes(state: tauri::State<'_, PhantomState>, text: String) {
     log::info!("Company notes updated");
 }
 
+/// Parse a PDF file and return extracted text
+#[tauri::command]
+fn parse_pdf(path: String) -> Result<String, String> {
+    utils::extract_pdf_text(&path)
+}
+
+/// Fetch text content from a URL (for company research)
+#[tauri::command]
+fn fetch_url(url: String) -> Result<String, String> {
+    utils::fetch_url_text(&url)
+}
+
 // ==================== APP SETUP ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -546,6 +559,8 @@ pub fn run() {
             set_resume,
             set_job_description,
             set_company_notes,
+            parse_pdf,
+            fetch_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Phantom AI");

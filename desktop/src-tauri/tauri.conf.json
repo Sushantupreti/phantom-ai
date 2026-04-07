@@ -19,7 +19,7 @@
         "x": null,
         "y": 40,
         "center": true,
-        "resizable": false,
+        "resizable": true,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,

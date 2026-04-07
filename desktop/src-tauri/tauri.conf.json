@@ -14,8 +14,8 @@
       {
         "label": "phantom-overlay",
         "title": "Phantom AI",
-        "width": 480,
-        "height": 64,
+        "width": 600,
+        "height": 52,
         "x": null,
         "y": 40,
         "center": true,

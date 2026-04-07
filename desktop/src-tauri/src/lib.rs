@@ -521,7 +521,7 @@ pub fn run() {
                     let screen_size = monitor.size();
                     let scale = monitor.scale_factor();
                     let screen_width = screen_size.width as f64 / scale;
-                    let x = (screen_width - 220.0) / 2.0;
+                    let x = (screen_width - 600.0) / 2.0;
                     let _ = window.set_position(tauri::Position::Logical(
                         tauri::LogicalPosition { x, y: 40.0 },
                     ));

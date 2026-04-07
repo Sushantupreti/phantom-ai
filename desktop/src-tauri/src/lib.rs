@@ -135,11 +135,6 @@ fn start_listening(
         return Err("Already listening".to_string());
     }
 
-    let deepgram_key = state.deepgram_key.lock().unwrap().clone();
-    if deepgram_key.is_empty() {
-        return Err("Deepgram API key not set. Go to Settings.".to_string());
-    }
-
     // Start mic capture on a separate thread (cpal::Stream is !Send)
     let (audio_tx, audio_rx) = crossbeam_channel::bounded(100);
 
@@ -173,101 +168,133 @@ fn start_listening(
         message: "Microphone active — listening...".into(),
     });
 
-    // Spawn async task for Deepgram + AI pipeline
+    // Spawn local Whisper + Ollama pipeline
     let app_handle = app.clone();
-    let claude_key = state.claude_key.lock().unwrap().clone();
 
     tauri::async_runtime::spawn(async move {
-        use audio::capture::{f32_to_i16_bytes, resample_to_16k, to_mono};
-        use stt::deepgram::DeepgramSTT;
-        use ai::engine::AIEngine;
+        use audio::capture::{resample_to_16k, to_mono};
+        use stt::whisper_local;
+        use ai::ollama::OllamaEngine;
 
-        // Connect to Deepgram
-        let (transcript_tx, mut transcript_rx) = tokio::sync::mpsc::channel(100);
-        let mut deepgram = DeepgramSTT::new(deepgram_key);
+        // Check Whisper availability
+        if !whisper_local::is_available() {
+            let _ = app_handle.emit("status", StatusEvent {
+                status: "error".into(),
+                message: "Whisper not found. Install: brew install whisper-cpp".into(),
+            });
+            return;
+        }
 
-        let audio_sender = match deepgram.start(transcript_tx).await {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Deepgram connection failed: {}", e);
-                let _ = app_handle.emit("status", StatusEvent {
-                    status: "error".into(),
-                    message: format!("Deepgram: {}", e),
-                });
-                return;
-            }
-        };
+        // Check Ollama availability
+        let ollama = OllamaEngine::new(None);
+        if !ollama.is_available().await {
+            let _ = app_handle.emit("status", StatusEvent {
+                status: "error".into(),
+                message: "Ollama not running. Start with: ollama serve".into(),
+            });
+            return;
+        }
 
         let _ = app_handle.emit("status", StatusEvent {
-            status: "connected".into(),
-            message: "Connected to Deepgram".into(),
+            status: "ready".into(),
+            message: "Local AI ready (Whisper + Ollama)".into(),
         });
 
-        // Forward audio to Deepgram
-        let audio_rx_clone = audio_rx.clone();
-        let dg_sender = audio_sender.clone();
-        tokio::spawn(async move {
-            loop {
-                match audio_rx_clone.recv() {
-                    Ok(chunk) => {
-                        let mono = to_mono(&chunk.samples, chunk.channels);
-                        let resampled = resample_to_16k(&mono, chunk.sample_rate);
-                        let bytes = f32_to_i16_bytes(&resampled);
-                        if dg_sender.send(bytes).await.is_err() {
-                            break;
+        // Accumulate ~3 seconds of audio then transcribe
+        let mut audio_buffer: Vec<f32> = Vec::new();
+        let mut buffer_sample_rate = 16000u32;
+        let chunk_duration_samples = 16000 * 3; // 3 seconds at 16kHz
+
+        loop {
+            match audio_rx.recv() {
+                Ok(chunk) => {
+                    let mono = to_mono(&chunk.samples, chunk.channels);
+                    let resampled = resample_to_16k(&mono, chunk.sample_rate);
+                    buffer_sample_rate = 16000;
+                    audio_buffer.extend_from_slice(&resampled);
+
+                    // When we have ~3 seconds, transcribe
+                    if audio_buffer.len() >= chunk_duration_samples {
+                        let samples_to_process: Vec<f32> = audio_buffer.drain(..).collect();
+
+                        let app_for_stt = app_handle.clone();
+
+                        // Transcribe in a blocking thread
+                        let transcript = tokio::task::spawn_blocking(move || {
+                            whisper_local::transcribe_audio(&samples_to_process, buffer_sample_rate)
+                        }).await;
+
+                        match transcript {
+                            Ok(Ok(text)) if !text.is_empty() && text.len() > 3 => {
+                                // Filter out whisper artifacts like [BLANK_AUDIO], (silence), etc
+                                let clean_text = text
+                                    .replace("[BLANK_AUDIO]", "")
+                                    .replace("(silence)", "")
+                                    .replace("[MUSIC]", "")
+                                    .trim()
+                                    .to_string();
+
+                                if clean_text.len() > 5 {
+                                    let _ = app_for_stt.emit("transcript", TranscriptEvent {
+                                        text: clean_text.clone(),
+                                        is_final: true,
+                                        speaker: "interviewer".into(),
+                                    });
+
+                                    // Check if it's a question
+                                    let q = clean_text.to_lowercase();
+                                    let is_question = q.contains('?')
+                                        || q.starts_with("tell me")
+                                        || q.starts_with("can you")
+                                        || q.starts_with("how")
+                                        || q.starts_with("what")
+                                        || q.starts_with("why")
+                                        || q.starts_with("describe")
+                                        || q.starts_with("explain")
+                                        || q.starts_with("walk me")
+                                        || q.starts_with("give me")
+                                        || q.starts_with("do you")
+                                        || q.starts_with("have you")
+                                        || q.starts_with("where");
+
+                                    if is_question && clean_text.len() > 15 {
+                                        let _ = app_for_stt.emit("status", StatusEvent {
+                                            status: "generating".into(),
+                                            message: "Generating answer...".into(),
+                                        });
+
+                                        let mut engine = OllamaEngine::new(None);
+                                        let (ai_tx, mut ai_rx) = tokio::sync::mpsc::channel::<ai::engine::AIResponseChunk>(100);
+                                        let question = clean_text.clone();
+                                        let app_for_ai = app_for_stt.clone();
+
+                                        tokio::spawn(async move {
+                                            while let Some(chunk) = ai_rx.recv().await {
+                                                let _ = app_for_ai.emit("ai_response", AIResponseEvent {
+                                                    text: chunk.text,
+                                                    is_done: chunk.is_done,
+                                                });
+                                            }
+                                        });
+
+                                        if let Err(e) = engine.generate_response(&question, ai_tx).await {
+                                            log::error!("Ollama error: {}", e);
+                                            let _ = app_for_stt.emit("status", StatusEvent {
+                                                status: "error".into(),
+                                                message: format!("Ollama: {}", e),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                log::error!("Whisper error: {}", e);
+                            }
+                            _ => {}
                         }
                     }
-                    Err(_) => break,
                 }
-            }
-        });
-
-        // Process transcripts
-        while let Some(result) = transcript_rx.recv().await {
-            let _ = app_handle.emit("transcript", TranscriptEvent {
-                text: result.text.clone(),
-                is_final: result.is_final,
-                speaker: "interviewer".into(),
-            });
-
-            // If final + looks like a question, generate AI response
-            if result.is_final && result.text.len() > 15 {
-                let q = result.text.to_lowercase();
-                let is_question = q.contains('?')
-                    || q.starts_with("tell me")
-                    || q.starts_with("can you")
-                    || q.starts_with("how")
-                    || q.starts_with("what")
-                    || q.starts_with("why")
-                    || q.starts_with("describe")
-                    || q.starts_with("explain")
-                    || q.starts_with("walk me");
-
-                if is_question && !claude_key.is_empty() {
-                    let engine = AIEngine::new(claude_key.clone());
-                    let (ai_tx, mut ai_rx) = tokio::sync::mpsc::channel::<ai::engine::AIResponseChunk>(100);
-                    let question = result.text.clone();
-                    let app_for_ai = app_handle.clone();
-
-                    // Stream AI response to frontend
-                    tokio::spawn(async move {
-                        while let Some(chunk) = ai_rx.recv().await {
-                            let _ = app_for_ai.emit("ai_response", AIResponseEvent {
-                                text: chunk.text,
-                                is_done: chunk.is_done,
-                            });
-                        }
-                    });
-
-                    let _ = app_handle.emit("status", StatusEvent {
-                        status: "generating".into(),
-                        message: "Generating answer...".into(),
-                    });
-
-                    if let Err(e) = engine.generate_response(&question, ai_tx).await {
-                        log::error!("AI error: {}", e);
-                    }
-                }
+                Err(_) => break,
             }
         }
     });
@@ -291,15 +318,15 @@ fn stop_listening(
 #[tauri::command]
 async fn generate_answer(
     app: tauri::AppHandle,
-    state: tauri::State<'_, PhantomState>,
+    _state: tauri::State<'_, PhantomState>,
     question: String,
 ) -> Result<(), String> {
-    let claude_key = state.claude_key.lock().unwrap().clone();
-    if claude_key.is_empty() {
-        return Err("Claude API key not set".to_string());
+    let engine = ai::ollama::OllamaEngine::new(None);
+
+    if !engine.is_available().await {
+        return Err("Ollama not running. Start with: ollama serve".to_string());
     }
 
-    let engine = ai::engine::AIEngine::new(claude_key);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<ai::engine::AIResponseChunk>(100);
     let app_handle = app.clone();
 
@@ -335,10 +362,9 @@ async fn screenshot_ocr(
         message: format!("OCR captured {} chars", result.text.len()),
     });
 
-    // Auto-send to AI if Claude key is configured
-    let claude_key = state.claude_key.lock().unwrap().clone();
-    if !claude_key.is_empty() {
-        let engine = ai::engine::AIEngine::new(claude_key);
+    // Auto-send to Ollama for analysis
+    {
+        let engine = ai::ollama::OllamaEngine::new(None);
         let (tx, mut rx) = tokio::sync::mpsc::channel::<ai::engine::AIResponseChunk>(100);
         let app_handle = app.clone();
         let screen_text = result.text.clone();

@@ -17,7 +17,6 @@ import {
   Check,
   Sparkles,
   AlertCircle,
-  Key,
 } from "lucide-react";
 import "./App.css";
 
@@ -46,10 +45,7 @@ export default function App() {
   const [opacity, setOpacityVal] = useState(0.95);
   const [clickThrough, setClickThroughVal] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [status, setStatus] = useState("Ready");
-  const [deepgramKey, setDeepgramKey] = useState("");
-  const [claudeKey, setClaudeKey] = useState("");
-  const [keysConfigured, setKeysConfigured] = useState(false);
+  const [status, setStatus] = useState("Ready — Local AI (Whisper + Ollama)");
   const [currentAIResponse, setCurrentAIResponse] = useState("");
   const [isAIStreaming, setIsAIStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -151,14 +147,6 @@ export default function App() {
     await invoke("set_click_through", { enabled: val }).catch(() => {});
   }, []);
 
-  const saveKeys = useCallback(async () => {
-    if (deepgramKey && claudeKey) {
-      await invoke("set_api_keys", { deepgramKey, claudeKey }).catch(() => {});
-      setKeysConfigured(true);
-      setStatus("API keys configured");
-    }
-  }, [deepgramKey, claudeKey]);
-
   return (
     <div className="h-full w-full" data-tauri-drag-region>
       <AnimatePresence mode="wait">
@@ -236,11 +224,9 @@ export default function App() {
                 <div className="flex flex-col items-center justify-center h-full text-center opacity-50">
                   <Ghost className="w-8 h-8 text-violet-400/30 mb-3" />
                   <p className="text-xs text-gray-500">
-                    {keysConfigured
-                      ? isListening
-                        ? "Listening for questions..."
-                        : "Click the mic to start listening"
-                      : "Configure API keys in Settings to get started"}
+                    {isListening
+                      ? "Listening for questions..."
+                      : "Click the mic to start listening"}
                   </p>
                 </div>
               )}
@@ -350,30 +336,20 @@ export default function App() {
               {/* API Keys */}
               <div>
                 <label className="text-[11px] text-gray-400 font-medium flex items-center gap-1.5 mb-2">
-                  <Key className="w-3 h-3" /> API Keys
+                  Local AI Engine
                 </label>
                 <div className="space-y-2">
-                  <input
-                    type="password"
-                    placeholder="Deepgram API Key"
-                    value={deepgramKey}
-                    onChange={(e) => setDeepgramKey(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/5 text-[10px] text-gray-300 placeholder-gray-600 outline-none focus:border-violet-500/30"
-                  />
-                  <input
-                    type="password"
-                    placeholder="Claude (Anthropic) API Key"
-                    value={claudeKey}
-                    onChange={(e) => setClaudeKey(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/5 text-[10px] text-gray-300 placeholder-gray-600 outline-none focus:border-violet-500/30"
-                  />
-                  <button
-                    onClick={saveKeys}
-                    disabled={!deepgramKey || !claudeKey}
-                    className="w-full py-2 rounded-lg bg-violet-500/10 border border-violet-500/20 text-[10px] text-violet-400 font-medium hover:bg-violet-500/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
-                    {keysConfigured ? "Keys Saved ✓" : "Save Keys"}
-                  </button>
+                  <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
+                    <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span className="text-[10px] text-emerald-400 flex-1">Whisper STT (Local)</span>
+                    <span className="text-[8px] text-gray-500">base.en</span>
+                  </div>
+                  <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
+                    <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span className="text-[10px] text-emerald-400 flex-1">Ollama LLM (Local)</span>
+                    <span className="text-[8px] text-gray-500">llama3.1:8b</span>
+                  </div>
+                  <p className="text-[9px] text-gray-600 text-center">100% offline — zero API costs — your data never leaves your Mac</p>
                 </div>
               </div>
 
